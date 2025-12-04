@@ -145,18 +145,11 @@ class Researcher:
                 sigma_pts = recent_logs['PTS'].std()
                 sigma_reb = recent_logs['REB'].std()
                 sigma_ast = recent_logs['AST'].std()
-os.makedirs(constants.DATA_DIR, exist_ok=True)
-            
-            output = {
-                '_meta': {
-                    'date': datetime.now().strftime('%Y-%m-%d'),
-                    'timestamp': time.time()
-                },
-                'players': self.player_baselines
-            }
 
-            with open(constants.BASELINES_FILE, 'w') as f:
-                json.dump(output else sigma_ast
+            # Handle NaN from std() if only 1 game played
+            sigma_pts = 0 if pd.isna(sigma_pts) else sigma_pts
+            sigma_reb = 0 if pd.isna(sigma_reb) else sigma_reb
+            sigma_ast = 0 if pd.isna(sigma_ast) else sigma_ast
 
             return {
                 'baseline_pts_min': baseline_pts_min,
@@ -176,11 +169,18 @@ os.makedirs(constants.DATA_DIR, exist_ok=True)
         """Saves the calculated baselines to a JSON file."""
         try:
             # Ensure data directory exists
-            import os
             os.makedirs(constants.DATA_DIR, exist_ok=True)
             
+            output = {
+                '_meta': {
+                    'date': datetime.now().strftime('%Y-%m-%d'),
+                    'timestamp': time.time()
+                },
+                'players': self.player_baselines
+            }
+
             with open(constants.BASELINES_FILE, 'w') as f:
-                json.dump(self.player_baselines, f, indent=4)
+                json.dump(output, f, indent=4)
             print(f"Baselines saved to {constants.BASELINES_FILE}")
         except Exception as e:
             print(f"Error saving baselines: {e}")
