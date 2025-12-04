@@ -19,7 +19,11 @@ class Poller(threading.Thread):
     def _load_baselines(self):
         try:
             with open(constants.BASELINES_FILE, 'r') as f:
-                return json.load(f)
+                data = json.load(f)
+                # Handle new format with metadata
+                if '_meta' in data and 'players' in data:
+                    return data['players']
+                return data
         except FileNotFoundError:
             print("Baselines file not found. Run researcher first.")
             return {}

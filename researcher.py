@@ -1,6 +1,7 @@
 import time
 import json
 import pandas as pd
+import os
 from datetime import datetime
 from nba_api.stats.endpoints import scoreboardv2, playercareerstats, playergamelog, commonteamroster
 from nba_api.stats.static import players
@@ -13,6 +14,11 @@ class Researcher:
 
     def run(self):
         print(f"[{datetime.now()}] Starting Researcher...")
+        
+        if self.check_existing_baselines():
+            print("Existing baselines found for today. Skipping re-calculation.")
+            return
+
         self.fetch_todays_games()
         if not self.today_games:
             print("No games found for today.")
@@ -21,6 +27,25 @@ class Researcher:
         self.build_baselines()
         self.save_baselines()
         print(f"[{datetime.now()}] Researcher completed. Baselines saved.")
+
+    def check_existing_baselines(self):
+        """Checks if valid baselines for today already exist."""
+        if not os.path.exists(constants.BASELINES_FILE):
+            return False
+        try:
+            with open(constants.BASELINES_FILE, 'r') as f:
+                data = json.load(f)
+            
+            # Check metadata
+            if '_meta' in data:
+                saved_date = data['_meta'].get('date')
+                today = datetime.now().strftime('%Y-%m-%d')
+                if saved_date == today:
+                    return True
+            return False
+        except Exception as e:
+            print(f"Error checking baselines: {e}")
+            return False
 
     def fetch_todays_games(self):
         """Fetches the schedule for today."""
@@ -120,11 +145,18 @@ class Researcher:
                 sigma_pts = recent_logs['PTS'].std()
                 sigma_reb = recent_logs['REB'].std()
                 sigma_ast = recent_logs['AST'].std()
+os.makedirs(constants.DATA_DIR, exist_ok=True)
+            
+            output = {
+                '_meta': {
+                    'date': datetime.now().strftime('%Y-%m-%d'),
+                    'timestamp': time.time()
+                },
+                'players': self.player_baselines
+            }
 
-            # Handle NaN from std() if only 1 game played
-            sigma_pts = 0 if pd.isna(sigma_pts) else sigma_pts
-            sigma_reb = 0 if pd.isna(sigma_reb) else sigma_reb
-            sigma_ast = 0 if pd.isna(sigma_ast) else sigma_ast
+            with open(constants.BASELINES_FILE, 'w') as f:
+                json.dump(output else sigma_ast
 
             return {
                 'baseline_pts_min': baseline_pts_min,
