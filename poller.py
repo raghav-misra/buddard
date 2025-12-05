@@ -1,6 +1,7 @@
 import time
 import json
 import threading
+import math
 from nba_api.live.nba.endpoints import boxscore
 import constants
 from notifier import Notifier
@@ -100,13 +101,22 @@ class Poller(threading.Thread):
         minutes_str = stats["minutes"]  # Format "PT12M34.00S"
 
         try:
-            # Simple parsing for minutes "PT12M..." -> 12
-            # This is a rough parsing, good enough for MVP
-            minutes_played = 0
-            if "M" in minutes_str:
-                minutes_played = int(minutes_str.split("M")[0].replace("PT", ""))
+            # Robust parsing for minutes "PT12M34.00S" -> 12.56
+            time_str = minutes_str.replace('PT', '')
+            minutes = 0
+            seconds = 0
+            
+            if 'M' in time_str:
+                parts = time_str.split('M')
+                minutes = int(parts[0])
+                time_str = parts[1]
+                
+            if 'S' in time_str:
+                seconds = float(time_str.replace('S', ''))
+                
+            minutes_played = minutes + (seconds / 60.0)
         except:
-            minutes_played = 0
+            minutes_played = 0.0
 
         if minutes_played < 1:
             return
@@ -119,12 +129,13 @@ class Poller(threading.Thread):
         # --- 1. Determine Alpha (Dynamic based on Minutes) ---
         # Instead of fixed per quarter, we scale alpha by minutes played.
         # This prevents "1 minute wonders" from breaking the projection.
-        # Formula: Alpha ramps up to 0.95 over 35 minutes.
-        # Min 1: 0.02 | Min 10: 0.28 | Min 20: 0.57 | Min 30: 0.85
-        alpha = min(0.95, minutes_played / 35.0)
+        # Formula: Alpha ramps up to 0.95 over player's average minutes.
+        avg_minutes = baseline["avg_minutes"]
+        safe_avg_min = max(10, avg_minutes)
+        alpha = min(0.95, minutes_played / safe_avg_min)
 
         # --- 2. Calculate Remaining Minutes (RM) ---
-        avg_minutes = baseline["avg_minutes"]
+        # avg_minutes already fetched above
 
         # Penalty Logic
         penalty = 0
@@ -177,7 +188,8 @@ class Poller(threading.Thread):
             period,
             reasoning_flags,
             alpha,
-            baseline["baseline_pts_min"] * baseline["avg_minutes"] # Season Avg PTS
+            baseline["baseline_pts_min"] * baseline["avg_minutes"], # Season Avg PTS
+            avg_minutes
         )
         self._check_trigger(
             player_id,
@@ -190,7 +202,8 @@ class Poller(threading.Thread):
             period,
             reasoning_flags,
             alpha,
-            baseline["baseline_reb_min"] * baseline["avg_minutes"] # Season Avg REB
+            baseline["baseline_reb_min"] * baseline["avg_minutes"], # Season Avg REB
+            avg_minutes
         )
         self._check_trigger(
             player_id,
@@ -203,7 +216,8 @@ class Poller(threading.Thread):
             period,
             reasoning_flags,
             alpha,
-            baseline["baseline_ast_min"] * baseline["avg_minutes"] # Season Avg AST
+            baseline["baseline_ast_min"] * baseline["avg_minutes"], # Season Avg AST
+            avg_minutes
         )
 
     def _calculate_pfs(
@@ -225,16 +239,27 @@ class Poller(threading.Thread):
         period,
         flags,
         alpha,
-        season_avg
+        season_avg,
+        player_avg_minutes
     ):
         # Handle missing sigma (e.g. rookies or data error)
         # Default to 20% of the projection as a rough variance estimate
         if sigma == 0:
             sigma = pfs * 0.2
 
+        # Variance Decay: Scale sigma by remaining time
+        # As the game ends, uncertainty collapses.
+        remaining_pct = max(0, (player_avg_minutes - minutes) / player_avg_minutes) if player_avg_minutes > 0 else 0
+        decay_factor = math.sqrt(remaining_pct)
+        
+        # Ensure we don't decay to absolute zero too early (keep 10% minimum variance until very end)
+        decay_factor = max(0.1, decay_factor)
+
+        adjusted_sigma = sigma * decay_factor
+
         # Range
-        low = pfs - (constants.SIGMA_MULTIPLIER * sigma)
-        high = pfs + (constants.SIGMA_MULTIPLIER * sigma)
+        low = pfs - (constants.SIGMA_MULTIPLIER * adjusted_sigma)
+        high = pfs + (constants.SIGMA_MULTIPLIER * adjusted_sigma)
 
         
         dynamic_threshold = season_avg * 0.8
