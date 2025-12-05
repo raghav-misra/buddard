@@ -55,22 +55,23 @@ def main():
     job_check_games()
 
     # Schedule daily research
-    # schedule.every().day.at("08:00").do(job_research)
+    schedule.every().day.at("08:00").do(job_research)
 
     # Schedule game checks every 5 minutes
-    # schedule.every(30).seconds.do(job_check_games)
+    schedule.every(5).minutes.do(job_check_games)
 
-    # try:
-    #     while True:
-    #         schedule.run_pending()
-    #         time.sleep(1)
-    # except KeyboardInterrupt:
-    #     print("Stopping bot...")
-    #     # Stop all pollers
-    #     for gid, poller in active_pollers.items():
-    #         poller.running = False
-    #         poller.join()
-    #     print("Bot stopped.")
+    try:
+        while True:
+            schedule.run_pending()
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print("Stopping bot...")
+        # Stop all pollers
+        for gid, poller in active_pollers.items():
+            poller.running = False
+            poller.join()
+        print("Bot stopped.")
+        raise SystemExit
 
 if __name__ == "__main__":
     main()

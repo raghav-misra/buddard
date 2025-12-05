@@ -68,6 +68,8 @@ class Poller(threading.Thread):
             "gameClock"
         ]  # String "PT10M00.00S" or similar, need to parse if precise, but period is enough for Alpha
 
+        print(f"[Game {self.game_id}] Live - Q{period} {clock} - Scanning players...")
+
         home_score = data["game"]["homeTeam"]["score"]
         away_score = data["game"]["awayTeam"]["score"]
         score_diff = abs(home_score - away_score)
@@ -114,13 +116,12 @@ class Poller(threading.Thread):
         current_ast = stats["assists"]
         current_fouls = stats["foulsPersonal"]
 
-        # --- 1. Determine Alpha (Dynamic) ---
-        if period == 1:
-            alpha = constants.ALPHA_Q1
-        elif period in [2, 3]:
-            alpha = constants.ALPHA_MID_GAME
-        else:
-            alpha = constants.ALPHA_Q4
+        # --- 1. Determine Alpha (Dynamic based on Minutes) ---
+        # Instead of fixed per quarter, we scale alpha by minutes played.
+        # This prevents "1 minute wonders" from breaking the projection.
+        # Formula: Alpha ramps up to 0.95 over 35 minutes.
+        # Min 1: 0.02 | Min 10: 0.28 | Min 20: 0.57 | Min 30: 0.85
+        alpha = min(0.95, minutes_played / 35.0)
 
         # --- 2. Calculate Remaining Minutes (RM) ---
         avg_minutes = baseline["avg_minutes"]
@@ -164,6 +165,7 @@ class Poller(threading.Thread):
         )
 
         # --- 4. Check Triggers ---
+        # Pass baseline stats to calculate dynamic thresholds
         self._check_trigger(
             player_id,
             name,
@@ -175,8 +177,34 @@ class Poller(threading.Thread):
             period,
             reasoning_flags,
             alpha,
+            baseline["baseline_pts_min"] * baseline["avg_minutes"] # Season Avg PTS
         )
-        # Can add REB and AST triggers similarly
+        self._check_trigger(
+            player_id,
+            name,
+            "REB",
+            pfs_reb,
+            baseline["sigma_reb"],
+            current_reb,
+            minutes_played,
+            period,
+            reasoning_flags,
+            alpha,
+            baseline["baseline_reb_min"] * baseline["avg_minutes"] # Season Avg REB
+        )
+        self._check_trigger(
+            player_id,
+            name,
+            "AST",
+            pfs_ast,
+            baseline["sigma_ast"],
+            current_ast,
+            minutes_played,
+            period,
+            reasoning_flags,
+            alpha,
+            baseline["baseline_ast_min"] * baseline["avg_minutes"] # Season Avg AST
+        )
 
     def _calculate_pfs(
         self, current_stat, current_min, baseline_pace, remaining_min, alpha
@@ -197,23 +225,46 @@ class Poller(threading.Thread):
         period,
         flags,
         alpha,
+        season_avg
     ):
+        # Handle missing sigma (e.g. rookies or data error)
+        # Default to 20% of the projection as a rough variance estimate
+        if sigma == 0:
+            sigma = pfs * 0.2
+
         # Range
         low = pfs - (constants.SIGMA_MULTIPLIER * sigma)
         high = pfs + (constants.SIGMA_MULTIPLIER * sigma)
 
-        # Thresholds
-        # For MVP, using default constants. In prod, these would be player-specific.
-        threshold_high = constants.DEFAULT_THRESHOLD_PTS_HIGH
+        
+        dynamic_threshold = season_avg * 0.8
+        
+        if stat_type == 'PTS':
+            threshold_high = max(dynamic_threshold, 7) # Min 10 pts
+            buffer = constants.BUFFER_PTS
+        elif stat_type == 'REB':
+            threshold_high = max(dynamic_threshold, 3) # Min 5 reb
+            buffer = constants.BUFFER_REB
+        elif stat_type == 'AST':
+            threshold_high = max(dynamic_threshold, 3) # Min 4 ast
+            buffer = constants.BUFFER_AST
+        else:
+            threshold_high = 999
+            buffer = 0
 
         # Alert Key to prevent duplicate alerts for the same condition
         alert_key = f"{player_id}_{stat_type}_{period}"
+
+        # Debug Log (Verbose)
+        # Only log if projection is somewhat significant to reduce spam
+        if low > (threshold_high * 0.5):
+            print(f"[DEBUG] {name} {stat_type}: Cur={current_val} PFS={pfs:.1f} Range=[{low:.1f}-{high:.1f}] Thresh={threshold_high:.1f} (Avg={season_avg:.1f})")
 
         if alert_key in self.alerted_players:
             return
 
         # HIGH Alert
-        if low > (threshold_high + constants.BUFFER_PTS):
+        if low > (threshold_high + buffer):
             reasoning = f"Q{period} Alpha={alpha}. " + ", ".join(flags)
             if not flags:
                 reasoning += "High usage/efficiency."
