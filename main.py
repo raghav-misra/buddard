@@ -58,7 +58,7 @@ def main():
     schedule.every().day.at("08:00").do(job_research)
 
     # Schedule game checks every 5 minutes
-    schedule.every(5).minutes.do(job_check_games)
+    # schedule.every(5).minutes.do(job_check_games)
 
     try:
         while True:
