@@ -5,7 +5,7 @@ import math
 from nba_api.live.nba.endpoints import boxscore
 import constants
 from notifier import Notifier
-
+from prediction_engine import PredictionEngine
 
 class Poller(threading.Thread):
     def __init__(self, game_id, home_team_id, visitor_team_id):
@@ -127,12 +127,8 @@ class Poller(threading.Thread):
         current_fouls = stats["foulsPersonal"]
 
         # --- 1. Determine Alpha (Dynamic based on Minutes) ---
-        # Instead of fixed per quarter, we scale alpha by minutes played.
-        # This prevents "1 minute wonders" from breaking the projection.
-        # Formula: Alpha ramps up to 0.95 over player's average minutes.
         avg_minutes = baseline["avg_minutes"]
-        safe_avg_min = max(10, avg_minutes)
-        alpha = min(0.95, minutes_played / safe_avg_min)
+        alpha = PredictionEngine.calculate_alpha(minutes_played, avg_minutes)
 
         # --- 2. Calculate Remaining Minutes (RM) ---
         # avg_minutes already fetched above
@@ -165,13 +161,13 @@ class Poller(threading.Thread):
             rm = 0
 
         # --- 3. Calculate PFS (Projected Final Stat) ---
-        pfs_pts = self._calculate_pfs(
+        pfs_pts = PredictionEngine.calculate_pfs(
             current_pts, minutes_played, baseline["baseline_pts_min"], rm, alpha
         )
-        pfs_reb = self._calculate_pfs(
+        pfs_reb = PredictionEngine.calculate_pfs(
             current_reb, minutes_played, baseline["baseline_reb_min"], rm, alpha
         )
-        pfs_ast = self._calculate_pfs(
+        pfs_ast = PredictionEngine.calculate_pfs(
             current_ast, minutes_played, baseline["baseline_ast_min"], rm, alpha
         )
 
@@ -220,12 +216,6 @@ class Poller(threading.Thread):
             avg_minutes
         )
 
-    def _calculate_pfs(
-        self, current_stat, current_min, baseline_pace, remaining_min, alpha
-    ):
-        current_pace = current_stat / current_min
-        weighted_pace = (alpha * current_pace) + ((1 - alpha) * baseline_pace)
-        return current_stat + (weighted_pace * remaining_min)
 
     def _check_trigger(
         self,
@@ -242,24 +232,10 @@ class Poller(threading.Thread):
         season_avg,
         player_avg_minutes
     ):
-        # Handle missing sigma (e.g. rookies or data error)
-        # Default to 20% of the projection as a rough variance estimate
-        if sigma == 0:
-            sigma = pfs * 0.2
-
-        # Variance Decay: Scale sigma by remaining time
-        # As the game ends, uncertainty collapses.
-        remaining_pct = max(0, (player_avg_minutes - minutes) / player_avg_minutes) if player_avg_minutes > 0 else 0
-        decay_factor = math.sqrt(remaining_pct)
-        
-        # Ensure we don't decay to absolute zero too early (keep 10% minimum variance until very end)
-        decay_factor = max(0.1, decay_factor)
-
-        adjusted_sigma = sigma * decay_factor
-
-        # Range
-        low = pfs - (constants.SIGMA_MULTIPLIER * adjusted_sigma)
-        high = pfs + (constants.SIGMA_MULTIPLIER * adjusted_sigma)
+        # Calculate Range using Engine
+        low, high, adjusted_sigma = PredictionEngine.get_prediction_range(
+            pfs, sigma, minutes, player_avg_minutes
+        )
 
         
         dynamic_threshold = season_avg * 0.8

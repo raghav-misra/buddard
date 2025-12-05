@@ -48,7 +48,7 @@ def job_check_games():
         active_pollers[game_id] = p
 
 def main():
-    print("NBA Prop Bet Bot Started.")
+    print("Hello Buddard Bot Starting...")
     
     # Run research immediately on startup to populate baselines
     job_research()
