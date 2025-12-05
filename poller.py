@@ -259,7 +259,8 @@ class Poller(threading.Thread):
         # Debug Log (Verbose)
         # Only log if projection is somewhat significant to reduce spam
         if low > (threshold_high * 0.5):
-            print(f"[DEBUG] {name} {stat_type}: Cur={current_val} PFS={pfs:.1f} Range=[{low:.1f}-{high:.1f}] Thresh={threshold_high:.1f} (Avg={season_avg:.1f})")
+            p25 = low + 0.25 * (high - low)
+            print(f"[DEBUG] {name} {stat_type}: Cur={current_val} PFS={pfs:.1f} Range=[{low:.1f}-{high:.1f}] P25={p25:.1f} Thresh={threshold_high:.1f}")
 
         if alert_key in self.alerted_players:
             return
