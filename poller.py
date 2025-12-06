@@ -44,12 +44,19 @@ class Poller(threading.Thread):
         # Fetch live box score
         # Note: Using the live endpoint which is faster and lighter than stats endpoint
         try:
-            box = boxscore.BoxScore(game_id=self.game_id)
+            # Set a timeout to prevent hanging
+            box = boxscore.BoxScore(game_id=self.game_id, timeout=10)
             data = box.get_dict()
-        except Exception:
+        except Exception as e:
             # If the game hasn't started, the API returns XML (403/404) which fails JSON parsing.
             # This is normal behavior for pre-game.
-            print(f"Game {self.game_id} not active yet.")
+            # However, we should log if it's a timeout or other error to help debugging.
+            if "timeout" in str(e).lower():
+                print(f"Game {self.game_id} poll timed out.")
+            elif "Expecting value" in str(e): # JSONDecodeError
+                print(f"Game {self.game_id} not active yet (JSON error).")
+            else:
+                print(f"Game {self.game_id} poll failed: {e}")
             return
 
         game_status = data["game"]["gameStatus"]  # 1=Not Started, 2=Live, 3=Final
@@ -234,7 +241,7 @@ class Poller(threading.Thread):
     ):
         # Calculate Range using Engine
         low, high, adjusted_sigma = PredictionEngine.get_prediction_range(
-            pfs, sigma, minutes, player_avg_minutes
+            pfs, sigma, minutes, player_avg_minutes, current_val
         )
 
         
@@ -260,7 +267,8 @@ class Poller(threading.Thread):
         # Only log if projection is somewhat significant to reduce spam
         if low > (threshold_high * 0.5):
             p25 = low + 0.25 * (high - low)
-            print(f"[DEBUG] {name} {stat_type}: Cur={current_val} PFS={pfs:.1f} Range=[{low:.1f}-{high:.1f}] P25={p25:.1f} Thresh={threshold_high:.1f}")
+            p50 = low + 0.50 * (high - low)
+            print(f"[DEBUG] {name} {stat_type}: Cur={current_val} PFS={pfs:.1f} Range=[{low:.1f}-{high:.1f}] P25={p25:.1f} P50={p50:.1f} Thresh={threshold_high:.1f}")
 
         if alert_key in self.alerted_players:
             return
@@ -270,6 +278,9 @@ class Poller(threading.Thread):
             reasoning = f"Q{period} Alpha={alpha}. " + ", ".join(flags)
             if not flags:
                 reasoning += "High usage/efficiency."
+            
+            # Calculate P50 for the alert
+            p50 = low + 0.50 * (high - low)
 
             self.notifier.send_alert(
                 player_name=name,
@@ -279,5 +290,6 @@ class Poller(threading.Thread):
                 minutes=minutes,
                 projected_range=(low, high),
                 reasoning=reasoning,
+                p50=p50
             )
             self.alerted_players.add(alert_key)

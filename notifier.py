@@ -2,7 +2,7 @@ class Notifier:
     def __init__(self):
         pass
 
-    def send_alert(self, player_name, stat_type, prediction, current_val, minutes, projected_range, reasoning):
+    def send_alert(self, player_name, stat_type, prediction, current_val, minutes, projected_range, reasoning, p50=None):
         """
         Formats and sends the prediction alert.
         Currently prints to console.
@@ -12,10 +12,16 @@ class Notifier:
         
         # Determine Action advice based on prediction direction
         if prediction == "HIGH":
+            targets = (
+                f"  - **Floor (>95% Hit):** {low:.1f}\n"
+                f"  - **25th %ile (~80% Hit):** {p25:.1f}"
+            )
+            if p50 is not None:
+                targets += f"\n  - **50th %ile (Median):** {p50:.1f}"
+                
             action_text = (
                 f"• **Betting Targets (OVER):**\n"
-                f"  - **Floor (>95% Hit):** {low:.1f}\n"
-                f"  - **25th %ile (~80% Hit):** {p25:.1f}\n"
+                f"{targets}\n"
                 f"• **Action:** Check live line. If line <= Target, consider OVER."
             )
         else:

@@ -191,7 +191,7 @@ def run_backtest(game_id):
                 
                 # Range
                 low, high, sigma = PredictionEngine.get_prediction_range(
-                    pfs, baseline[sigma_key], cur_min, baseline['avg_minutes']
+                    pfs, baseline[sigma_key], cur_min, baseline['avg_minutes'], cur_val
                 )
                 
                 # Error

@@ -11,7 +11,7 @@ def start_poller(game_id):
         # 1. Fetch Game Details to get Team IDs
         print("Fetching game details from NBA Live API...")
         try:
-            box = boxscore.BoxScore(game_id=game_id)
+            box = boxscore.BoxScore(game_id=game_id, timeout=10)
             data = box.get_dict()
         except Exception as e:
             print(f"Error fetching boxscore: {e}")

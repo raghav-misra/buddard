@@ -40,7 +40,7 @@ class PredictionEngine:
         return current_stat + (weighted_pace * remaining_min)
 
     @staticmethod
-    def get_prediction_range(pfs, sigma, minutes_played, avg_minutes):
+    def get_prediction_range(pfs, sigma, minutes_played, avg_minutes, current_stat=0):
         """
         Calculates the confidence interval (low, high) with variance decay.
         """
@@ -60,4 +60,7 @@ class PredictionEngine:
         low = pfs - (constants.SIGMA_MULTIPLIER * adjusted_sigma)
         high = pfs + (constants.SIGMA_MULTIPLIER * adjusted_sigma)
         
+        # Clamp low to current_stat (cannot score negative points from now on)
+        low = max(low, current_stat)
+
         return low, high, adjusted_sigma

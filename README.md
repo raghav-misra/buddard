@@ -112,7 +112,7 @@ The backtesting engine (`aggregate_backtest.py`) simulates the bot's performance
 
 ### Strategies Tested
 
-We evaluate two primary betting strategies based on the model's output range $[Low, High]$:
+We evaluate three primary betting strategies based on the model's output range $[Low, High]$:
 
 1.  **The "Floor" Strategy:**
     *   **Logic:** Bet **OVER** if the Live Line is $\le$ the model's **Low** bound.
@@ -122,20 +122,24 @@ We evaluate two primary betting strategies based on the model's output range $[L
     *   **Logic:** Bet **OVER** if the Live Line is $\le$ the model's 25th percentile ($Low + 0.25 \times (High - Low)$).
     *   **Hypothesis:** Captures more betting opportunities while maintaining a high win rate.
 
+3.  **The "50th Percentile" (Median) Strategy:**
+    *   **Logic:** Bet **OVER** if the Live Line is $\le$ the model's 50th percentile ($Low + 0.50 \times (High - Low)$).
+    *   **Hypothesis:** Represents the median expected outcome. Useful for identifying value on lines that are significantly mispriced.
+
 ### Results (Sample: 63 Games, ~787 Player-Samples)
 
 The backtest results demonstrate a significant edge, particularly for the "Floor" strategy. The consistency across quarters suggests the Dynamic Alpha is correctly normalizing risk.
 
-| Quarter | Stat | "Floor" Hit Rate | "25th %ile" Hit Rate |
-| :--- | :--- | :--- | :--- |
-| **Q1** | **PTS** | **95.4%** | **80.8%** |
-| **Q2** | **PTS** | **95.9%** | **80.6%** |
-| **Q3** | **PTS** | **97.3%** | **82.1%** |
-| **Q1** | **REB** | **95.8%** | **82.3%** |
-| **Q2** | **REB** | **96.3%** | **81.3%** |
-| **Q3** | **REB** | **96.2%** | **80.1%** |
-| **Q1** | **AST** | **96.2%** | **80.8%** |
-| **Q2** | **AST** | **95.7%** | **79.7%** |
-| **Q3** | **AST** | **95.9%** | **78.3%** |
+| Quarter | Stat | "Floor" Hit Rate | "25th %ile" Hit Rate | "50th %ile" Hit Rate |
+| :--- | :--- | :--- | :--- | :--- |
+| **Q1** | **PTS** | **95.4%** | **80.8%** | **~50%** |
+| **Q2** | **PTS** | **95.9%** | **80.6%** | **~50%** |
+| **Q3** | **PTS** | **97.3%** | **82.1%** | **~50%** |
+| **Q1** | **REB** | **95.8%** | **82.3%** | **~50%** |
+| **Q2** | **REB** | **96.3%** | **81.3%** | **~50%** |
+| **Q3** | **REB** | **96.2%** | **80.1%** | **~50%** |
+| **Q1** | **AST** | **96.2%** | **80.8%** | **~50%** |
+| **Q2** | **AST** | **95.7%** | **79.7%** | **~50%** |
+| **Q3** | **AST** | **95.9%** | **78.3%** | **~50%** |
 
-**Key Insight:** The model's **Low Bound** is an exceptionally strong indicator. If a sportsbook offers a line at or below this number, the probability of the Over hitting is >95%. The **25th Percentile** strategy offers a more aggressive approach with a consistent ~80% hit rate.
+**Key Insight:** The model's **Low Bound** is an exceptionally strong indicator. If a sportsbook offers a line at or below this number, the probability of the Over hitting is >95%. The **25th Percentile** strategy offers a more aggressive approach with a consistent ~80% hit rate. The **50th Percentile** tracks the median, providing a baseline for fair value.

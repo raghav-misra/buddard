@@ -204,7 +204,7 @@ def process_game(game_id, aggregator):
                     cur_stats[stat_name], cur_min, baseline[base_key], rm, alpha
                 )
                 low, high, _ = PredictionEngine.get_prediction_range(
-                    pfs, baseline[sigma_key], cur_min, baseline['avg_minutes']
+                    pfs, baseline[sigma_key], cur_min, baseline['avg_minutes'], cur_stats[stat_name]
                 )
                 
                 # Strategy 1: Floor (Low End of Range)
@@ -218,18 +218,42 @@ def process_game(game_id, aggregator):
                 # Hit if Final > 25th Percentile.
                 p25_threshold = low + 0.25 * (high - low)
                 is_p25_hit = final_stats[stat_name] > p25_threshold
+
+                # Strategy 3: 50th Percentile (Median)
+                # Bet OVER if Line <= 50th Percentile.
+                # Hit if Final > 50th Percentile.
+                p50_threshold = low + 0.50 * (high - low)
+                is_p50_hit = final_stats[stat_name] > p50_threshold
                 
                 aggregator[(label, stat_name)]['total'] += 1
                 if is_floor_hit:
                     aggregator[(label, stat_name)]['floor_hits'] += 1
                 if is_p25_hit:
                     aggregator[(label, stat_name)]['p25_hits'] += 1
+                if is_p50_hit:
+                    aggregator[(label, stat_name)]['p50_hits'] += 1
+
+def print_running_summary(aggregator, total_games_processed):
+    print(f"\n--- Running Stats ({total_games_processed} Games) ---")
+    print(f"{'QTR':<5} | {'STAT':<5} | {'FLOOR %':<8} | {'25th %':<8} | {'50th %':<8} | {'SAMPLE':<6}")
+    
+    sorted_keys = sorted(aggregator.keys())
+    for qtr, stat in sorted_keys:
+        data = aggregator[(qtr, stat)]
+        total = data['total']
+        if total == 0: continue
+        
+        floor_ratio = (data['floor_hits'] / total * 100)
+        p25_ratio = (data['p25_hits'] / total * 100)
+        p50_ratio = (data['p50_hits'] / total * 100)
+        
+        print(f"{qtr:<5} | {stat:<5} | {floor_ratio:<6.1f}%  | {p25_ratio:<6.1f}%  | {p50_ratio:<6.1f}%  | {total:<6}")
 
 def main():
     load_baselines_from_file()
     
-    # (Quarter, Stat) -> {floor_hits, p25_hits, total}
-    aggregator = defaultdict(lambda: {'floor_hits': 0, 'p25_hits': 0, 'total': 0})
+    # (Quarter, Stat) -> {floor_hits, p25_hits, p50_hits, total}
+    aggregator = defaultdict(lambda: {'floor_hits': 0, 'p25_hits': 0, 'p50_hits': 0, 'total': 0})
     
     target_dates = get_dates_last_month()
     
@@ -250,15 +274,16 @@ def main():
             for gid in game_ids:
                 process_game(gid, aggregator)
                 total_games_processed += 1
+                print_running_summary(aggregator, total_games_processed)
     except KeyboardInterrupt:
         print("\nRun interrupted by user. Showing partial results...")
 
-    print("\n" + "="*65)
+    print("\n" + "="*80)
     print(f"AGGREGATE BACKTEST RESULTS ({total_games_processed} Games)")
-    print("Strategies: Floor (Low > Line) vs 25th Percentile (Low+25% > Line)")
-    print("="*65)
-    print(f"{'QTR':<5} | {'STAT':<5} | {'FLOOR %':<8} | {'25th %':<8} | {'SAMPLE':<6}")
-    print("-" * 65)
+    print("Strategies: Floor (Low > Line) vs 25th Percentile vs 50th Percentile")
+    print("="*80)
+    print(f"{'QTR':<5} | {'STAT':<5} | {'FLOOR %':<8} | {'25th %':<8} | {'50th %':<8} | {'SAMPLE':<6}")
+    print("-" * 80)
     
     # Sort by Quarter then Stat
     sorted_keys = sorted(aggregator.keys())
@@ -267,13 +292,15 @@ def main():
         data = aggregator[(qtr, stat)]
         floor_hits = data['floor_hits']
         p25_hits = data['p25_hits']
+        p50_hits = data['p50_hits']
         total = data['total']
         
         floor_ratio = (floor_hits / total * 100) if total > 0 else 0.0
         p25_ratio = (p25_hits / total * 100) if total > 0 else 0.0
+        p50_ratio = (p50_hits / total * 100) if total > 0 else 0.0
         
-        print(f"{qtr:<5} | {stat:<5} | {floor_ratio:<6.1f}%  | {p25_ratio:<6.1f}%  | {total:<6}")
-    print("="*65)
+        print(f"{qtr:<5} | {stat:<5} | {floor_ratio:<6.1f}%  | {p25_ratio:<6.1f}%  | {p50_ratio:<6.1f}%  | {total:<6}")
+    print("="*80)
 
 if __name__ == "__main__":
     main()

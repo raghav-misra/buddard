@@ -52,7 +52,7 @@ class Researcher:
         print("Fetching today's schedule...")
         try:
             # ScoreboardV2 gets games for a specific date
-            board = scoreboardv2.ScoreboardV2(game_date=datetime.now().strftime('%Y-%m-%d'))
+            board = scoreboardv2.ScoreboardV2(game_date=datetime.now().strftime('%Y-%m-%d'), timeout=10)
             games_df = board.game_header.get_data_frame()
             
             # Filter for games that haven't finished (though usually we run this in AM)
@@ -77,7 +77,7 @@ class Researcher:
     def _process_team(self, team_id):
         """Fetches roster and stats for a specific team."""
         try:
-            roster = commonteamroster.CommonTeamRoster(team_id=team_id)
+            roster = commonteamroster.CommonTeamRoster(team_id=team_id, timeout=10)
             roster_df = roster.common_team_roster.get_data_frame()
             time.sleep(constants.API_DELAY)
 
@@ -104,7 +104,7 @@ class Researcher:
         """Calculates baseline pace and standard deviation for a player."""
         try:
             # 1. Get Season Averages (Baseline Pace)
-            career = playercareerstats.PlayerCareerStats(player_id=player_id)
+            career = playercareerstats.PlayerCareerStats(player_id=player_id, timeout=10)
             season_df = career.season_totals_regular_season.get_data_frame()
             time.sleep(constants.API_DELAY)
 
@@ -130,7 +130,7 @@ class Researcher:
 
             # 2. Get Recent Game Logs for Variance (Sigma)
             # We use the last 10 games for variance calculation
-            gamelog = playergamelog.PlayerGameLog(player_id=player_id, season='2024-25') # Update season dynamically in prod
+            gamelog = playergamelog.PlayerGameLog(player_id=player_id, season='2024-25', timeout=10) # Update season dynamically in prod
             logs_df = gamelog.player_game_log.get_data_frame()
             time.sleep(constants.API_DELAY)
 
