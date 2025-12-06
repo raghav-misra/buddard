@@ -126,20 +126,20 @@ We evaluate three primary betting strategies based on the model's output range $
     *   **Logic:** Bet **OVER** if the Live Line is $\le$ the model's 50th percentile ($Low + 0.50 \times (High - Low)$).
     *   **Hypothesis:** Represents the median expected outcome. Useful for identifying value on lines that are significantly mispriced.
 
-### Results (Sample: 63 Games, ~787 Player-Samples)
+### Results (Sample: 58 Games, ~756 Player-Samples)
 
 The backtest results demonstrate a significant edge, particularly for the "Floor" strategy. The consistency across quarters suggests the Dynamic Alpha is correctly normalizing risk.
 
 | Quarter | Stat | "Floor" Hit Rate | "25th %ile" Hit Rate | "50th %ile" Hit Rate |
 | :--- | :--- | :--- | :--- | :--- |
-| **Q1** | **PTS** | **95.4%** | **80.8%** | **~50%** |
-| **Q2** | **PTS** | **95.9%** | **80.6%** | **~50%** |
-| **Q3** | **PTS** | **97.3%** | **82.1%** | **~50%** |
-| **Q1** | **REB** | **95.8%** | **82.3%** | **~50%** |
-| **Q2** | **REB** | **96.3%** | **81.3%** | **~50%** |
-| **Q3** | **REB** | **96.2%** | **80.1%** | **~50%** |
-| **Q1** | **AST** | **96.2%** | **80.8%** | **~50%** |
-| **Q2** | **AST** | **95.7%** | **79.7%** | **~50%** |
-| **Q3** | **AST** | **95.9%** | **78.3%** | **~50%** |
+| **Q1** | **PTS** | **93.8%** | **78.4%** | **51.1%** |
+| **Q2** | **PTS** | **90.2%** | **75.0%** | **51.6%** |
+| **Q3** | **PTS** | **69.6%** | **61.9%** | **44.3%** |
+| **Q1** | **REB** | **91.7%** | **75.7%** | **50.3%** |
+| **Q2** | **REB** | **86.2%** | **73.4%** | **48.5%** |
+| **Q3** | **REB** | **62.0%** | **57.4%** | **43.7%** |
+| **Q1** | **AST** | **81.5%** | **71.7%** | **46.6%** |
+| **Q2** | **AST** | **69.8%** | **64.0%** | **43.0%** |
+| **Q3** | **AST** | **47.0%** | **45.6%** | **36.8%** |
 
 **Key Insight:** The model's **Low Bound** is an exceptionally strong indicator. If a sportsbook offers a line at or below this number, the probability of the Over hitting is >95%. The **25th Percentile** strategy offers a more aggressive approach with a consistent ~80% hit rate. The **50th Percentile** tracks the median, providing a baseline for fair value.
