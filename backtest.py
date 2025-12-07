@@ -1,19 +1,72 @@
 import time
-import sys
 import datetime
 import pandas as pd
 from collections import defaultdict
-from nba_api.stats.endpoints import scoreboardv2, boxscoretraditionalv3, playercareerstats, playergamelog
-from prediction_engine import PredictionEngine
+from nba_api.stats.endpoints import scoreboardv2, boxscoretraditionalv3, playercareerstats, playergamelog, leaguedashteamstats
+from lib.prediction_engine import PredictionEngine
 
 import json
 import os
-import constants
+import lib.constants as constants
 
 # Constants
 SEASON = '2025-26' 
 API_DELAY = 0.6
 BASELINE_CACHE = {}
+TEAM_DEF_RATINGS = {}
+
+def fetch_team_defense():
+    """Fetches team defensive ratings and pace for DvP adjustments."""
+    global TEAM_DEF_RATINGS
+    print("Fetching Team Stats (Defense & Pace)...")
+    try:
+        # 1. Fetch Advanced Team Stats (for PACE)
+        teams_adv = leaguedashteamstats.LeagueDashTeamStats(
+            season=SEASON,
+            measure_type_detailed_defense='Advanced',
+            timeout=10
+        )
+        df_adv = teams_adv.league_dash_team_stats.get_data_frame()
+        time.sleep(API_DELAY)
+
+        # 2. Fetch Opponent Stats (for OPP_PTS, OPP_REB, OPP_AST)
+        teams_opp = leaguedashteamstats.LeagueDashTeamStats(
+            season=SEASON,
+            measure_type_detailed_defense='Opponent',
+            timeout=10
+        )
+        df_opp = teams_opp.league_dash_team_stats.get_data_frame()
+        time.sleep(API_DELAY)
+        
+        if not df_adv.empty and not df_opp.empty:
+            # Calculate League Averages
+            avg_pace = df_adv['PACE'].mean()
+            avg_opp_pts = df_opp['OPP_PTS'].mean()
+            avg_opp_reb = df_opp['OPP_REB'].mean()
+            avg_opp_ast = df_opp['OPP_AST'].mean()
+
+            print(f"League Averages - Pace: {avg_pace:.2f}, OppPTS: {avg_opp_pts:.1f}, OppREB: {avg_opp_reb:.1f}, OppAST: {avg_opp_ast:.1f}")
+
+            for _, row in df_adv.iterrows():
+                team_id = row['TEAM_ID']
+                # Find corresponding row in df_opp
+                opp_row = df_opp[df_opp['TEAM_ID'] == team_id].iloc[0]
+                
+                TEAM_DEF_RATINGS[team_id] = {
+                    'pace': row['PACE'],
+                    'opp_pts': opp_row['OPP_PTS'],
+                    'opp_reb': opp_row['OPP_REB'],
+                    'opp_ast': opp_row['OPP_AST'],
+                    'league_avg_pace': avg_pace,
+                    'league_avg_opp_pts': avg_opp_pts,
+                    'league_avg_opp_reb': avg_opp_reb,
+                    'league_avg_opp_ast': avg_opp_ast
+                }
+            print(f"Fetched detailed stats for {len(TEAM_DEF_RATINGS)} teams.")
+        else:
+            print("Could not fetch team stats.")
+    except Exception as e:
+        print(f"Error fetching team defense: {e}")
 
 def load_baselines_from_file():
     """Loads baselines from the researcher's file to speed up backtesting."""
@@ -47,18 +100,22 @@ def get_games_for_date(date_str):
         games = board.game_header.get_data_frame()
         if games.empty:
             return []
-        # Filter for completed games (Status=3 usually, or just check GAME_STATUS_TEXT)
-        # We'll assume past dates have completed games.
-        return games['GAME_ID'].tolist()
+        # Return list of dicts with team info
+        return games[['GAME_ID', 'HOME_TEAM_ID', 'VISITOR_TEAM_ID']].to_dict('records')
     except Exception as e:
         print(f"Error fetching games for {date_str}: {e}")
         return []
 
-def get_player_baseline(player_id):
+def get_player_baseline(player_id, game_date, is_home, opponent_id):
     """Fetches baseline stats for a player, with caching."""
-    pid_str = str(player_id)
-    if pid_str in BASELINE_CACHE:
-        return BASELINE_CACHE[pid_str]
+    # Cache key needs to include date/home/opp now, or we just cache the raw stats and adjust dynamically.
+    # To keep it simple and fast, let's cache the RAW season/log data, and do the adjustments every time.
+    # But BASELINE_CACHE currently stores the final dict.
+    # Let's change the cache key to include the context: f"{player_id}_{game_date}"
+    
+    cache_key = f"{player_id}_{game_date}_{is_home}_{opponent_id}"
+    if cache_key in BASELINE_CACHE:
+        return BASELINE_CACHE[cache_key]
 
     try:
         # 1. Get Season Averages
@@ -76,29 +133,97 @@ def get_player_baseline(player_id):
 
         games_played = current_season['GP']
         
-        baseline = {
-            'baseline_pts_min': current_season['PTS'] / minutes,
-            'baseline_reb_min': current_season['REB'] / minutes,
-            'baseline_ast_min': current_season['AST'] / minutes,
-            'avg_minutes': minutes / games_played
-        }
+        season_pts_min = current_season['PTS'] / minutes
+        season_reb_min = current_season['REB'] / minutes
+        season_ast_min = current_season['AST'] / minutes
+        avg_minutes = minutes / games_played
 
-        # 2. Get Recent Game Logs for Sigma
+        # 2. Get Recent Game Logs (Filtered by Date)
         gamelog = playergamelog.PlayerGameLog(player_id=player_id, season=SEASON)
         logs_df = gamelog.player_game_log.get_data_frame()
         time.sleep(API_DELAY)
 
-        if logs_df.empty:
-            baseline['sigma_pts'] = 5.0
-            baseline['sigma_reb'] = 2.0
-            baseline['sigma_ast'] = 2.0
+        # Filter logs to only include games BEFORE the backtest date
+        if not logs_df.empty:
+            # Convert GAME_DATE to datetime for comparison
+            # API format is usually "OCT 29, 2024" or similar. 
+            # Actually, let's check the format. It's usually 'YYYY-MM-DD' in some endpoints or 'MMM DD, YYYY' in others.
+            # In research_api output it was "Apr 11, 2025".
+            # We need to parse it.
+            logs_df['date_dt'] = pd.to_datetime(logs_df['GAME_DATE'])
+            target_dt = pd.to_datetime(game_date)
+            
+            past_logs = logs_df[logs_df['date_dt'] < target_dt]
         else:
-            recent_logs = logs_df.head(20)
-            baseline['sigma_pts'] = recent_logs['PTS'].std() if not pd.isna(recent_logs['PTS'].std()) else 5.0
-            baseline['sigma_reb'] = recent_logs['REB'].std() if not pd.isna(recent_logs['REB'].std()) else 2.0
-            baseline['sigma_ast'] = recent_logs['AST'].std() if not pd.isna(recent_logs['AST'].std()) else 2.0
+            past_logs = pd.DataFrame()
 
-        BASELINE_CACHE[pid_str] = baseline
+        # --- Weighted Baseline ---
+        if not past_logs.empty:
+            last_5 = past_logs.head(5)
+            l5_min = last_5['MIN'].sum()
+            
+            if l5_min > 0:
+                l5_pts_min = last_5['PTS'].sum() / l5_min
+                l5_reb_min = last_5['REB'].sum() / l5_min
+                l5_ast_min = last_5['AST'].sum() / l5_min
+                
+                baseline_pts_min = (0.7 * season_pts_min) + (0.3 * l5_pts_min)
+                baseline_reb_min = (0.7 * season_reb_min) + (0.3 * l5_reb_min)
+                baseline_ast_min = (0.7 * season_ast_min) + (0.3 * l5_ast_min)
+            else:
+                baseline_pts_min = season_pts_min
+                baseline_reb_min = season_reb_min
+                baseline_ast_min = season_ast_min
+        else:
+            baseline_pts_min = season_pts_min
+            baseline_reb_min = season_reb_min
+            baseline_ast_min = season_ast_min
+
+        # --- Home/Away Adjustment ---
+        ha_modifier = 1.02 if is_home else 0.98
+        baseline_pts_min *= ha_modifier
+        baseline_reb_min *= ha_modifier
+        baseline_ast_min *= ha_modifier
+
+        # --- Opponent DvP & Pace Adjustment ---
+        if opponent_id in TEAM_DEF_RATINGS:
+            stats = TEAM_DEF_RATINGS[opponent_id]
+            
+            # Pace Modifier
+            pace_modifier = stats['pace'] / stats['league_avg_pace']
+            
+            # Stat Specific Modifiers
+            pts_modifier = stats['opp_pts'] / stats['league_avg_opp_pts']
+            reb_modifier = stats['opp_reb'] / stats['league_avg_opp_reb']
+            ast_modifier = stats['opp_ast'] / stats['league_avg_opp_ast']
+            
+            # Apply Modifiers
+            baseline_pts_min *= (pace_modifier * pts_modifier)
+            baseline_reb_min *= (pace_modifier * reb_modifier)
+            baseline_ast_min *= (pace_modifier * ast_modifier)
+
+        # --- Variance (Sigma) ---
+        if past_logs.empty:
+            sigma_pts = 5.0
+            sigma_reb = 2.0
+            sigma_ast = 2.0
+        else:
+            recent_logs = past_logs.head(20)
+            sigma_pts = recent_logs['PTS'].std() if not pd.isna(recent_logs['PTS'].std()) else 5.0
+            sigma_reb = recent_logs['REB'].std() if not pd.isna(recent_logs['REB'].std()) else 2.0
+            sigma_ast = recent_logs['AST'].std() if not pd.isna(recent_logs['AST'].std()) else 2.0
+
+        baseline = {
+            'baseline_pts_min': baseline_pts_min,
+            'baseline_reb_min': baseline_reb_min,
+            'baseline_ast_min': baseline_ast_min,
+            'avg_minutes': avg_minutes,
+            'sigma_pts': sigma_pts,
+            'sigma_reb': sigma_reb,
+            'sigma_ast': sigma_ast
+        }
+
+        BASELINE_CACHE[cache_key] = baseline
         return baseline
     except Exception as e:
         print(f"Error getting baseline for {player_id}: {e}")
@@ -125,8 +250,12 @@ def parse_minutes(min_str):
     except:
         return 0.0
 
-def process_game(game_id, aggregator):
+def process_game(game_info, game_date, aggregator):
     """Runs the prediction engine on a game and updates the aggregator."""
+    game_id = game_info['GAME_ID']
+    home_team_id = game_info['HOME_TEAM_ID']
+    visitor_team_id = game_info['VISITOR_TEAM_ID']
+    
     print(f"  Processing Game {game_id}...")
     
     # 1. Ground Truth
@@ -161,8 +290,13 @@ def process_game(game_id, aggregator):
     # 3. Evaluate
     for _, player in significant_players.iterrows():
         player_id = player['personId']
+        team_id = player['teamId']
         
-        baseline = get_player_baseline(player_id)
+        # Determine Home/Away and Opponent
+        is_home = (team_id == home_team_id)
+        opponent_id = visitor_team_id if is_home else home_team_id
+        
+        baseline = get_player_baseline(player_id, game_date, is_home, opponent_id)
         if not baseline:
             continue
 
@@ -180,6 +314,7 @@ def process_game(game_id, aggregator):
             if p_snap.empty:
                 cur_stats = {'PTS': 0, 'REB': 0, 'AST': 0}
                 cur_min = 0.0
+                cur_fouls = 0
             else:
                 p_data = p_snap.iloc[0]
                 cur_stats = {
@@ -188,10 +323,39 @@ def process_game(game_id, aggregator):
                     'AST': p_data['assists']
                 }
                 cur_min = parse_minutes(p_data['minutes'])
+                cur_fouls = p_data['foulsPersonal']
+
+            # Calculate Score Differential
+            # Group by teamId to get team scores
+            team_scores = snapshot_df.groupby('teamId')['points'].sum()
+            
+            # Determine my team and opp team score
+            my_score = team_scores.get(team_id, 0)
+            opp_score = team_scores.get(opponent_id, 0)
+            score_diff = my_score - opp_score
+
+            # Map label to period number
+            period_map = {"Q1": 1, "Q2": 2, "Q3": 3}
+            period = period_map.get(label, 0)
 
             # Calc Prediction
-            alpha = PredictionEngine.calculate_alpha(cur_min, baseline['avg_minutes'])
-            rm = max(0, baseline['avg_minutes'] - cur_min)
+            # Use PTS pace for performance factor (Hot Hand)
+            if cur_min > 0:
+                cur_pace_pts = cur_stats['PTS'] / cur_min
+            else:
+                cur_pace_pts = 0
+                
+            perf_factor = PredictionEngine.calculate_performance_factor(cur_pace_pts, baseline['baseline_pts_min'])
+            
+            # Use new method for remaining minutes
+            rm = PredictionEngine.calculate_dynamic_remaining_minutes(
+                baseline['avg_minutes'], 
+                cur_min, 
+                cur_fouls, 
+                score_diff, 
+                period,
+                perf_factor
+            )
 
             stat_types = [
                 ('PTS', 'baseline_pts_min', 'sigma_pts'),
@@ -201,7 +365,7 @@ def process_game(game_id, aggregator):
 
             for stat_name, base_key, sigma_key in stat_types:
                 pfs = PredictionEngine.calculate_pfs(
-                    cur_stats[stat_name], cur_min, baseline[base_key], rm, alpha
+                    cur_stats[stat_name], baseline[base_key], rm
                 )
                 low, high, _ = PredictionEngine.get_prediction_range(
                     pfs, baseline[sigma_key], cur_min, baseline['avg_minutes'], cur_stats[stat_name]
@@ -250,7 +414,8 @@ def print_running_summary(aggregator, total_games_processed):
         print(f"{qtr:<5} | {stat:<5} | {floor_ratio:<6.1f}%  | {p25_ratio:<6.1f}%  | {p50_ratio:<6.1f}%  | {total:<6}")
 
 def main():
-    load_baselines_from_file()
+    # load_baselines_from_file() # Disable file loading for now as we need dynamic calculation
+    fetch_team_defense()
     
     # (Quarter, Stat) -> {floor_hits, p25_hits, p50_hits, total}
     aggregator = defaultdict(lambda: {'floor_hits': 0, 'p25_hits': 0, 'p50_hits': 0, 'total': 0})
@@ -268,11 +433,11 @@ def main():
     try:
         for date_str in target_dates:
             print(f"\n--- Date: {date_str} ---")
-            game_ids = get_games_for_date(date_str)
-            print(f"Found {len(game_ids)} games.")
+            games = get_games_for_date(date_str)
+            print(f"Found {len(games)} games.")
             
-            for gid in game_ids:
-                process_game(gid, aggregator)
+            for game in games:
+                process_game(game, date_str, aggregator)
                 total_games_processed += 1
                 print_running_summary(aggregator, total_games_processed)
     except KeyboardInterrupt:

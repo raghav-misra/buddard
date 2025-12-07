@@ -1,8 +1,8 @@
 import time
 import schedule
 from datetime import datetime
-from researcher import Researcher
-from poller import Poller
+from lib.researcher import Researcher
+from lib.poller import Poller
 
 # Track active pollers: {game_id: PollerThread}
 active_pollers = {}

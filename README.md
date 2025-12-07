@@ -29,53 +29,37 @@ To remain free, we utilize a single source for player/game stats: `nba_api`. The
 
 ## Rule-Based Prediction Logic
 
-The Rules Engine now calculates a point estimate and a confidence interval (the range).
+The Rules Engine uses a **"Bank & Burn"** model with dynamic minute adjustments.
 
-### Core Projection Formula (General Point Estimate, $\text{PFS}$)
+### Core Projection Formula (Bank & Burn)
 
-The Poller calculates the point estimate ($\text{PFS}$) for *any* stat by weighting the **Current Pace** against the **Historical Baseline Pace**.
-
-We use a **Quadratic Dampening** curve to calculate $\alpha$ based on the percentage of average minutes played. This ensures we trust the baseline heavily early on and shift to the current game pace as the sample size grows.
+Instead of blending paces, we "Bank" the current stats and assume the player will "Burn" the remaining minutes at their historical baseline pace. This is statistically safer than assuming a hot streak will continue indefinitely.
 
 $$
-\text{Progress} = \frac{\text{Current Minutes}}{\text{Average Minutes}}
-$$
-$$
-\alpha = \text{Progress}^2 \quad (\text{Capped at } 1.0)
+\text{PFS} = \text{Current Stats} + (\text{Baseline Pace} \times \text{Expected Remaining Minutes})
 $$
 
-*   **25% Played:** $\alpha = 0.06$ (94% Baseline)
-*   **50% Played:** $\alpha = 0.25$ (75% Baseline)
-*   **75% Played:** $\alpha = 0.56$ (44% Baseline)
-*   **100% Played:** $\alpha = 1.00$ (100% Current Pace)
+### Dynamic Minutes Adjustment (Hot Hand Logic)
 
-$$
-\text{PFS} = \text{CS} + \left[ \left( \alpha \times \frac{\text{CS}}{\text{CPM}} \right) + \left( (1 - \alpha) \times \text{Baseline Pace} \right) \right] \times \text{RM}
-$$
+We adjust the **Expected Remaining Minutes** based on game context and player performance.
 
-### Dynamic Minutes Adjustment ($\text{RM}$)
+1.  **Base Calculation:** $\text{Avg Minutes} - \text{Current Minutes}$
+2.  **Contextual Penalties:**
+    *   **Foul Trouble:** Reduced by 15-25% if fouls are high relative to the quarter.
+    *   **Blowout Risk:** Reduced by 15-30% if the score differential is >20 in the second half (winning team only).
+3.  **Hot Hand Bonus:** If a player is outperforming their baseline pace (Points Per Minute), we assume the coach will extend their rotation.
+    $$
+    \text{Performance Factor} = \frac{\text{Current Pace}}{\text{Baseline Pace}}
+    $$
+    $$
+    \text{Bonus} = 1 + 0.2 \times \ln(\text{Performance Factor})
+    $$
 
-$\text{RM}$ (Expected Remaining Minutes) is adjusted based on live game flow:
+### Trigger Logic (Asymmetric Range)
 
-$$
-\text{RM} = \text{PTM} - \text{CPM} - \text{Penalty Minutes}
-$$
+We calculate a confidence interval using **Variance Decay**, but unlike standard models, we use an **Asymmetric Range** to account for the "elastic ceiling" of NBA scoring.
 
-**Rules for** $\text{Penalty Minutes}$**:**
-
-  * **Foul Trouble:** If $\text{Player Fouls} \ge 4$ in Q2/Q3, $\text{Penalty Minutes} = 5$.
-
-  * **Blowout (Refined):** If $\text{Score Differential} > 20$ in Q3/Q4 **AND** the player is on the **Winning Team**, $\text{Penalty Minutes} = 8$.
-    *   *Reasoning:* Winning teams pull starters to rest them. Losing teams often keep starters in to attempt a comeback or pad stats ("garbage time" production).
-
-  * **Injury/Ejection:** If $\text{Player Status}$ changes mid-game, $\text{PTM}$ becomes $48 \times (\text{Remaining Quarters} / 4)$.
-
-### Trigger Logic (Predicting the Range and Confidence)
-
-Instead of comparing to a Vegas line, we create a confidence interval based on the player's historical **variance** ($\sigma$) and apply **Variance Decay**.
-
-1.  **Variance Decay:** As the game progresses, the uncertainty (variance) decreases. We scale the standard deviation by the square root of the remaining time percentage.
-
+1.  **Variance Decay:**
     $$
     \text{Decay Factor} = \sqrt{\frac{\text{Remaining Minutes}}{\text{Average Minutes}}}
     $$
@@ -83,19 +67,15 @@ Instead of comparing to a Vegas line, we create a confidence interval based on t
     \sigma_{adj} = \sigma \times \text{Decay Factor}
     $$
 
-2.  **Calculate Prediction Range:** Define the **Expected Final Range** as $\text{PFS} \pm (1.5 \times \sigma_{adj})$.
+2.  **Asymmetric Bounds:**
+    *   **Low Bound (Floor):** $\text{PFS} - (1.0 \times \sigma_{adj})$
+        *   *Tighter floor because players rarely underperform massively once minutes are secured.*
+    *   **High Bound (Ceiling):** $\text{PFS} + (2.0 \times \sigma_{adj})$
+        *   *Wider ceiling to account for overtime or "garbage time" stat padding.*
 
-      * $\text{PFS}_{low} = \text{PFS} - (1.5 \times \sigma_{adj})$
-
-      * $\text{PFS}_{high} = \text{PFS} + (1.5 \times \sigma_{adj})$
-
-3.  **Dynamic Thresholds:** The bot automatically calculates a significance threshold based on the player's season average (e.g., $80\%$ of Season Average).
-
-4.  **Trigger Condition:** Alert if the **entire Expected Final Range is above or below the Prediction Threshold**.
-
-      * **HIGH Output Alert:** Alert if $\text{PFS}_{low} > \text{Threshold} + \text{Confidence Buffer}$
-
-      * **LOW Output Alert:** Alert if $\text{PFS}_{high} < \text{Threshold} - \text{Confidence Buffer}$
+3.  **Trigger Condition:**
+    *   **HIGH Alert:** If $\text{Low Bound} > \text{Threshold} + \text{Buffer}$
+    *   **LOW Alert:** If $\text{High Bound} < \text{Threshold} - \text{Buffer}$
 
 ## Backtesting & Validation
 
@@ -107,7 +87,7 @@ The backtesting engine (`aggregate_backtest.py`) simulates the bot's performance
 
 1.  **Ground Truth:** Fetching the final box score to know the actual outcome.
 2.  **Time Travel:** Using `BoxScoreTraditionalV3` with `range_type` to fetch the exact state of the game at specific checkpoints (End of Q1, Halftime, End of Q3).
-3.  **Prediction:** Feeding these partial stats into the `PredictionEngine` (using the same Quadratic Alpha and Variance Decay logic as the live bot).
+3.  **Prediction:** Feeding these partial stats into the `PredictionEngine` (using the same Bank & Burn logic and Hot Hand adjustments as the live bot).
 4.  **Evaluation:** Comparing the predicted range against the actual final result to determine a "Hit" or "Miss".
 
 ### Strategies Tested
@@ -126,20 +106,6 @@ We evaluate three primary betting strategies based on the model's output range $
     *   **Logic:** Bet **OVER** if the Live Line is $\le$ the model's 50th percentile ($Low + 0.50 \times (High - Low)$).
     *   **Hypothesis:** Represents the median expected outcome. Useful for identifying value on lines that are significantly mispriced.
 
-### Results (Sample: 58 Games, ~756 Player-Samples)
+### Results
 
-The backtest results demonstrate a significant edge, particularly for the "Floor" strategy. The consistency across quarters suggests the Dynamic Alpha is correctly normalizing risk.
-
-| Quarter | Stat | "Floor" Hit Rate | "25th %ile" Hit Rate | "50th %ile" Hit Rate |
-| :--- | :--- | :--- | :--- | :--- |
-| **Q1** | **PTS** | **93.8%** | **78.4%** | **51.1%** |
-| **Q2** | **PTS** | **90.2%** | **75.0%** | **51.6%** |
-| **Q3** | **PTS** | **69.6%** | **61.9%** | **44.3%** |
-| **Q1** | **REB** | **91.7%** | **75.7%** | **50.3%** |
-| **Q2** | **REB** | **86.2%** | **73.4%** | **48.5%** |
-| **Q3** | **REB** | **62.0%** | **57.4%** | **43.7%** |
-| **Q1** | **AST** | **81.5%** | **71.7%** | **46.6%** |
-| **Q2** | **AST** | **69.8%** | **64.0%** | **43.0%** |
-| **Q3** | **AST** | **47.0%** | **45.6%** | **36.8%** |
-
-**Key Insight:** The model's **Low Bound** is an exceptionally strong indicator. If a sportsbook offers a line at or below this number, the probability of the Over hitting is >95%. The **25th Percentile** strategy offers a more aggressive approach with a consistent ~80% hit rate. The **50th Percentile** tracks the median, providing a baseline for fair value.
+*Note: The model has recently been overhauled to the "Bank & Burn" architecture. New backtesting results are pending.*

@@ -1,6 +1,5 @@
 import argparse
-import time
-from poller import Poller
+from lib.poller import Poller
 from nba_api.live.nba.endpoints import boxscore
 
 def start_poller(game_id):

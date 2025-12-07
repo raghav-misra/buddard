@@ -3,9 +3,9 @@ import json
 import threading
 import math
 from nba_api.live.nba.endpoints import boxscore
-import constants
-from notifier import Notifier
-from prediction_engine import PredictionEngine
+import lib.constants as constants
+from lib.notifier import Notifier
+from lib.prediction_engine import PredictionEngine
 
 class Poller(threading.Thread):
     def __init__(self, game_id, home_team_id, visitor_team_id):
@@ -103,12 +103,10 @@ class Poller(threading.Thread):
         baseline = self.baselines[player_id]["stats"]
 
         # Parse Current Stats
-        # Live endpoint structure is different from stats endpoint
         stats = player_data["statistics"]
-        minutes_str = stats["minutes"]  # Format "PT12M34.00S"
+        minutes_str = stats["minutes"]
 
         try:
-            # Robust parsing for minutes "PT12M34.00S" -> 12.56
             time_str = minutes_str.replace('PT', '')
             minutes = 0
             seconds = 0
@@ -132,96 +130,39 @@ class Poller(threading.Thread):
         current_reb = stats["reboundsTotal"]
         current_ast = stats["assists"]
         current_fouls = stats["foulsPersonal"]
-
-        # --- 1. Determine Alpha (Dynamic based on Minutes) ---
         avg_minutes = baseline["avg_minutes"]
-        alpha = PredictionEngine.calculate_alpha(minutes_played, avg_minutes)
 
-        # --- 2. Calculate Remaining Minutes (RM) ---
-        # avg_minutes already fetched above
+        # --- 1. Calculate Performance Factor (Hot Hand) ---
+        # Use PTS pace as the primary driver for minutes adjustment
+        current_pace_pts = current_pts / minutes_played
+        perf_factor = PredictionEngine.calculate_performance_factor(current_pace_pts, baseline["baseline_pts_min"])
 
-        # Penalty Logic
-        penalty = 0
+        # --- 2. Calculate Expected Remaining Minutes ---
+        rm = PredictionEngine.calculate_dynamic_remaining_minutes(
+            avg_minutes, minutes_played, current_fouls, score_diff, period, perf_factor
+        )
+
+        # Reasoning Flags
         reasoning_flags = []
-
-        # Foul Trouble
         if current_fouls >= constants.FOUL_TROUBLE_THRESHOLD and period in [2, 3]:
-            penalty += constants.FOUL_TROUBLE_PENALTY
             reasoning_flags.append("Foul Trouble")
-
-        # Blowout (Garbage Time) - Only if on winning team
+        
         team_id = self.baselines[player_id]["team_id"]
-        if (
-            score_diff > constants.BLOWOUT_DIFF_THRESHOLD
-            and period >= 3
-            and team_id == winning_team_id
-        ):
-            penalty += constants.BLOWOUT_PENALTY
+        if (score_diff > constants.BLOWOUT_DIFF_THRESHOLD and period >= 3 and team_id == winning_team_id):
             reasoning_flags.append("Blowout Risk")
-
-        # Projected Total Minutes (PTM) - Simple assumption: PTM is Avg Minutes unless penalized
-        # A better model would project PTM based on current rotation, but let's stick to the design doc
-        # RM = PTM - CPM - Penalty
-        # If PTM is just Avg Minutes:
-        rm = avg_minutes - minutes_played - penalty
-        if rm < 0:
-            rm = 0
+            
+        if perf_factor > 1.2:
+            reasoning_flags.append("Hot Hand")
 
         # --- 3. Calculate PFS (Projected Final Stat) ---
-        pfs_pts = PredictionEngine.calculate_pfs(
-            current_pts, minutes_played, baseline["baseline_pts_min"], rm, alpha
-        )
-        pfs_reb = PredictionEngine.calculate_pfs(
-            current_reb, minutes_played, baseline["baseline_reb_min"], rm, alpha
-        )
-        pfs_ast = PredictionEngine.calculate_pfs(
-            current_ast, minutes_played, baseline["baseline_ast_min"], rm, alpha
-        )
+        pfs_pts = PredictionEngine.calculate_pfs(current_pts, baseline["baseline_pts_min"], rm)
+        pfs_reb = PredictionEngine.calculate_pfs(current_reb, baseline["baseline_reb_min"], rm)
+        pfs_ast = PredictionEngine.calculate_pfs(current_ast, baseline["baseline_ast_min"], rm)
 
         # --- 4. Check Triggers ---
-        # Pass baseline stats to calculate dynamic thresholds
-        self._check_trigger(
-            player_id,
-            name,
-            "PTS",
-            pfs_pts,
-            baseline["sigma_pts"],
-            current_pts,
-            minutes_played,
-            period,
-            reasoning_flags,
-            alpha,
-            baseline["baseline_pts_min"] * baseline["avg_minutes"], # Season Avg PTS
-            avg_minutes
-        )
-        self._check_trigger(
-            player_id,
-            name,
-            "REB",
-            pfs_reb,
-            baseline["sigma_reb"],
-            current_reb,
-            minutes_played,
-            period,
-            reasoning_flags,
-            alpha,
-            baseline["baseline_reb_min"] * baseline["avg_minutes"], # Season Avg REB
-            avg_minutes
-        )
-        self._check_trigger(
-            player_id,
-            name,
-            "AST",
-            pfs_ast,
-            baseline["sigma_ast"],
-            current_ast,
-            minutes_played,
-            period,
-            reasoning_flags,
-            alpha,
-            baseline["baseline_ast_min"] * baseline["avg_minutes"], # Season Avg AST
-            avg_minutes
-        )
+        self._check_trigger(player_id, name, "PTS", pfs_pts, baseline["sigma_pts"], current_pts, minutes_played, period, reasoning_flags, perf_factor, baseline["baseline_pts_min"] * avg_minutes, avg_minutes)
+        self._check_trigger(player_id, name, "REB", pfs_reb, baseline["sigma_reb"], current_reb, minutes_played, period, reasoning_flags, perf_factor, baseline["baseline_reb_min"] * avg_minutes, avg_minutes)
+        self._check_trigger(player_id, name, "AST", pfs_ast, baseline["sigma_ast"], current_ast, minutes_played, period, reasoning_flags, perf_factor, baseline["baseline_ast_min"] * avg_minutes, avg_minutes)
 
 
     def _check_trigger(
@@ -235,7 +176,7 @@ class Poller(threading.Thread):
         minutes,
         period,
         flags,
-        alpha,
+        perf_factor,
         season_avg,
         player_avg_minutes
     ):
@@ -243,53 +184,45 @@ class Poller(threading.Thread):
         low, high, adjusted_sigma = PredictionEngine.get_prediction_range(
             pfs, sigma, minutes, player_avg_minutes, current_val
         )
-
         
-        dynamic_threshold = season_avg * 0.8
+        # Dynamic Thresholds
+        # High Threshold: 80% of Season Avg (Alert if we are sure to beat this)
+        threshold_high = season_avg * 0.8
         
         if stat_type == 'PTS':
-            threshold_high = max(dynamic_threshold, 7) # Min 10 pts
+            threshold_high = max(threshold_high, 7)
             buffer = constants.BUFFER_PTS
         elif stat_type == 'REB':
-            threshold_high = max(dynamic_threshold, 3) # Min 5 reb
+            threshold_high = max(threshold_high, 3)
             buffer = constants.BUFFER_REB
         elif stat_type == 'AST':
-            threshold_high = max(dynamic_threshold, 3) # Min 4 ast
+            threshold_high = max(threshold_high, 3)
             buffer = constants.BUFFER_AST
         else:
-            threshold_high = 999
             buffer = 0
 
-        # Alert Key to prevent duplicate alerts for the same condition
         alert_key = f"{player_id}_{stat_type}_{period}"
 
-        # Debug Log (Verbose)
-        # Only log if projection is somewhat significant to reduce spam
+        # Debug Log
         if low > (threshold_high * 0.5):
-            p25 = low + 0.25 * (high - low)
             p50 = low + 0.50 * (high - low)
-            print(f"[DEBUG] {name} {stat_type}: Cur={current_val} PFS={pfs:.1f} Range=[{low:.1f}-{high:.1f}] P25={p25:.1f} P50={p50:.1f} Thresh={threshold_high:.1f}")
+            print(f"[DEBUG] {name} {stat_type}: Cur={current_val} PFS={pfs:.1f} Range=[{low:.1f}-{high:.1f}] P50={p50:.1f} Perf={perf_factor:.2f}")
 
         if alert_key in self.alerted_players:
             return
 
-        # HIGH Alert
+        # HIGH Alert (Entire range is ABOVE threshold)
         if low > (threshold_high + buffer):
-            reasoning = f"Q{period} Alpha={alpha}. " + ", ".join(flags)
-            if not flags:
-                reasoning += "High usage/efficiency."
-            
-            # Calculate P50 for the alert
+            reasoning = f"Q{period} Perf={perf_factor:.2f}. " + ", ".join(flags)
             p50 = low + 0.50 * (high - low)
-
-            self.notifier.send_alert(
-                player_name=name,
-                stat_type=stat_type,
-                prediction="HIGH",
-                current_val=current_val,
-                minutes=minutes,
-                projected_range=(low, high),
-                reasoning=reasoning,
-                p50=p50
-            )
+            self.notifier.send_alert(name, stat_type, "HIGH", current_val, minutes, (low, high), reasoning, p50)
             self.alerted_players.add(alert_key)
+            
+        # LOW Alert (Entire range is BELOW threshold)
+        elif high < (threshold_high - buffer):
+             # Only alert LOW if significant minutes played to avoid early game noise
+            if minutes > (player_avg_minutes * 0.4):
+                reasoning = f"Q{period} Perf={perf_factor:.2f}. " + ", ".join(flags)
+                p50 = low + 0.50 * (high - low)
+                self.notifier.send_alert(name, stat_type, "LOW", current_val, minutes, (low, high), reasoning, p50)
+                self.alerted_players.add(alert_key)
