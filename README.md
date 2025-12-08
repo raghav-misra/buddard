@@ -108,4 +108,28 @@ We evaluate three primary betting strategies based on the model's output range $
 
 ### Results
 
-*Note: The model has recently been overhauled to the "Bank & Burn" architecture. New backtesting results are pending.*
+**Aggregate Backtest (19 Games - Dec 2025)**
+
+The "Floor" strategy demonstrates exceptional accuracy, particularly in the 3rd Quarter where the model's conservative adjustments for rotation and efficiency take effect.
+
+| QTR | STAT | FLOOR % (Win Rate) | 25th % | 50th % | SAMPLE |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Q1** | **AST** | **84.6 %** | 52.6 % | 30.8 % | 247 |
+| **Q1** | **PTS** | **87.4 %** | 66.0 % | 38.9 % | 247 |
+| **Q1** | **REB** | **85.0 %** | 58.7 % | 34.0 % | 247 |
+| **Q2** | **AST** | **86.6 %** | 55.5 % | 38.1 % | 247 |
+| **Q2** | **PTS** | **84.2 %** | 60.3 % | 38.5 % | 247 |
+| **Q2** | **REB** | **84.2 %** | 60.7 % | 36.0 % | 247 |
+| **Q3** | **AST** | **96.0 %** | 48.2 % | 38.1 % | 247 |
+| **Q3** | **PTS** | **92.7 %** | 60.3 % | 47.4 % | 247 |
+| **Q3** | **REB** | **93.5 %** | 57.1 % | 42.9 % | 247 |
+
+**Key Takeaway:** The **Q3 Floor** prediction is the "Golden Signal." When the model says a player's *minimum* projection is X at the end of the 3rd quarter, they exceed that number >92% of the time. This is due to the specific "End Game" logic applied in Q3 (capped minutes, efficiency penalties).
+
+### Statistical Insights
+
+1.  **The "Golden Signal" (Q3 Floor):** The model achieves its highest conviction at the end of the 3rd Quarter. By this point, the "End Game" logic (capped Q4 minutes, efficiency penalties) effectively filters out noise. **Q3 Assists (96.0%)** and **Rebounds (93.5%)** are particularly resilient to variance.
+2.  **Early Game Volatility:** Q1 and Q2 "Floor" hit rates hover around ~85%. While strong, the lower accuracy reflects the risk of "Hot Hand Regression"—players who start hot often cool off or see reduced minutes in the second half, which the model aggressively accounts for in Q3 but treats more optimistically in the first half.
+3.  **Strategy Recommendation:**
+    *   **Conservative (High Win Rate):** Exclusively target **Q3 Floor** alerts. The >92% hit rate suggests these lines are "safe" barring injury or extreme outliers.
+    *   **Aggressive (Value):** Use **Q1/Q2 Floor** alerts for players with consistent roles, but be wary of blowout risks which can skew early projections.

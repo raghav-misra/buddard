@@ -55,17 +55,28 @@ class PredictionEngine:
         # Formula: 1 + 0.2 * ln(Performance Factor)
         # Cap performance factor to avoid log explosions or massive minutes
         safe_perf = max(0.5, min(performance_factor, 2.0)) 
-        hot_hand_mod = 1.0 + (0.2 * math.log(safe_perf))
+        
+        # Dampen hot hand effect in second half (Q3/Q4)
+        # Rotations are tighter, less room for "bonus" minutes
+        hot_hand_weight = 0.1 if period >= 3 else 0.2
+        
+        hot_hand_mod = 1.0 + (hot_hand_weight * math.log(safe_perf))
         
         # Apply modifiers
         expected_remaining = base_remaining * modifier * hot_hand_mod
         
         # Hard cap: Cannot play more than (48 - current_minutes)
         max_possible = 48.0 - current_minutes
+        
+        # Q3/Q4 Cap: Cannot assume they play more than 12 mins in Q4 to "catch up"
+        # If they are under minutes in Q3, they likely won't play 15 mins in Q4.
+        if period >= 3:
+            max_possible = min(max_possible, 12.0)
+            
         return min(expected_remaining, max_possible)
 
     @staticmethod
-    def calculate_pfs(current_stat, baseline_pace, expected_remaining_min):
+    def calculate_pfs(current_stat, baseline_pace, expected_remaining_min, period=1):
         """
         Calculates the Projected Final Stat (PFS) using 'Bank & Burn'.
         
@@ -73,7 +84,10 @@ class PredictionEngine:
         
         We assume regression to the mean for the remainder of the game.
         """
-        future_production = baseline_pace * expected_remaining_min
+        # Efficiency Penalty for Q3/Q4 (Defensive intensity increases)
+        efficiency_mod = 0.90 if period >= 3 else 1.0
+        
+        future_production = baseline_pace * expected_remaining_min * efficiency_mod
         return current_stat + future_production
 
     @staticmethod

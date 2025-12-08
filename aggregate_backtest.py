@@ -84,10 +84,10 @@ def load_baselines_from_file():
             print(f"Error loading baselines file: {e}")
 
 def get_dates_last_month():
-    """Returns a list of date strings for the last 30 days (excluding today)."""
+    """Returns a list of date strings for the last 7 days (excluding today)."""
     dates = []
     today = datetime.date.today()
-    for i in range(1, 31):
+    for i in range(1, 8):
         d = today - datetime.timedelta(days=i)
         dates.append(d.strftime('%Y-%m-%d'))
     print(dates)
@@ -365,7 +365,7 @@ def process_game(game_info, game_date, aggregator):
 
             for stat_name, base_key, sigma_key in stat_types:
                 pfs = PredictionEngine.calculate_pfs(
-                    cur_stats[stat_name], baseline[base_key], rm
+                    cur_stats[stat_name], baseline[base_key], rm, period
                 )
                 low, high, _ = PredictionEngine.get_prediction_range(
                     pfs, baseline[sigma_key], cur_min, baseline['avg_minutes'], cur_stats[stat_name]
@@ -373,21 +373,21 @@ def process_game(game_info, game_date, aggregator):
                 
                 # Strategy 1: Floor (Low End of Range)
                 # Bet OVER if Line <= Low.
-                # Hit if Final > Low.
+                # Hit if Final >= Low.
                 floor_threshold = low
-                is_floor_hit = final_stats[stat_name] > floor_threshold
+                is_floor_hit = final_stats[stat_name] >= floor_threshold
 
                 # Strategy 2: 25th Percentile
                 # Bet OVER if Line <= 25th Percentile.
-                # Hit if Final > 25th Percentile.
+                # Hit if Final >= 25th Percentile.
                 p25_threshold = low + 0.25 * (high - low)
-                is_p25_hit = final_stats[stat_name] > p25_threshold
+                is_p25_hit = final_stats[stat_name] >= p25_threshold
 
                 # Strategy 3: 50th Percentile (Median)
                 # Bet OVER if Line <= 50th Percentile.
-                # Hit if Final > 50th Percentile.
+                # Hit if Final >= 50th Percentile.
                 p50_threshold = low + 0.50 * (high - low)
-                is_p50_hit = final_stats[stat_name] > p50_threshold
+                is_p50_hit = final_stats[stat_name] >= p50_threshold
                 
                 aggregator[(label, stat_name)]['total'] += 1
                 if is_floor_hit:

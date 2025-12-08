@@ -155,9 +155,9 @@ class Poller(threading.Thread):
             reasoning_flags.append("Hot Hand")
 
         # --- 3. Calculate PFS (Projected Final Stat) ---
-        pfs_pts = PredictionEngine.calculate_pfs(current_pts, baseline["baseline_pts_min"], rm)
-        pfs_reb = PredictionEngine.calculate_pfs(current_reb, baseline["baseline_reb_min"], rm)
-        pfs_ast = PredictionEngine.calculate_pfs(current_ast, baseline["baseline_ast_min"], rm)
+        pfs_pts = PredictionEngine.calculate_pfs(current_pts, baseline["baseline_pts_min"], rm, period)
+        pfs_reb = PredictionEngine.calculate_pfs(current_reb, baseline["baseline_reb_min"], rm, period)
+        pfs_ast = PredictionEngine.calculate_pfs(current_ast, baseline["baseline_ast_min"], rm, period)
 
         # --- 4. Check Triggers ---
         self._check_trigger(player_id, name, "PTS", pfs_pts, baseline["sigma_pts"], current_pts, minutes_played, period, reasoning_flags, perf_factor, baseline["baseline_pts_min"] * avg_minutes, avg_minutes)
